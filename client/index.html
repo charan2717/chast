@@ -1,47 +1,134 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>One-on-One Chat</title>
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <title>One-on-One Chat</title>
+  <style>
+    body { font-family: Arial; margin: 20px; }
+    #chat-box { border:1px solid black; height:200px; overflow:auto; padding:5px; }
+    #online-users { margin-top:10px; font-size: 14px; }
+  </style>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
 <body>
-    <h2>One-on-One Chat</h2>
+  <h2>Full-featured One-on-One Chat</h2>
 
+  <!-- Login/Register -->
+  <div id="auth">
+    <input id="username" placeholder="Username"><br><br>
+    <input id="password" placeholder="Password" type="password"><br><br>
+    <button onclick="register()">Register</button>
+    <button onclick="login()">Login</button>
+  </div>
+
+  <!-- Chat UI -->
+  <div id="chat-ui" style="display:none;">
     <input id="room" placeholder="Room ID"><br><br>
-    <input id="username" placeholder="Your Name"><br><br>
-    <button onclick="joinRoom()">Join Chat</button>
-
-    <div id="chat-box" style="border:1px solid black; height:200px; overflow:auto; margin-top:20px;"></div>
-
+    <button onclick="joinRoom()">Join Room</button><br><br>
+    <div id="online-users"></div>
+    <div id="chat-box"></div><br>
     <input id="message" placeholder="Type message...">
     <button onclick="sendMessage()">Send</button>
+    <input type="file" id="fileInput">
+    <button onclick="sendFile()">Send File</button>
+    <div id="typing"></div>
+  </div>
 
-   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-<script>
+  <script>
     const socket = io("https://chast.onrender.com", {
         transports: ["websocket", "polling"]
     });
+    let currentUsername = "";
+    let currentRoom = "";
 
-    function joinRoom() {
-        const room = document.getElementById("room").value;
-        socket.emit("join", { room: room });
+    // --- AUTH ---
+    function register(){
+      fetch("https://chast.onrender.com/register", {
+        method:"POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({username: document.getElementById("username").value, password: document.getElementById("password").value})
+      }).then(res=>res.json()).then(data=>{
+        alert(data.success ? "Registered!" : data.error);
+      });
     }
 
-    socket.on("message", (data) => {
-        const box = document.getElementById("chat-box");
-        box.innerHTML += `<p><b>${data.sender}:</b> ${data.text}</p>`;
+    function login(){
+      fetch("https://chast.onrender.com/login", {
+        method:"POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({username: document.getElementById("username").value, password: document.getElementById("password").value})
+      }).then(res=>res.json()).then(data=>{
+        if(data.success){
+          currentUsername = document.getElementById("username").value;
+          document.getElementById("auth").style.display="none";
+          document.getElementById("chat-ui").style.display="block";
+        } else alert(data.error);
+      });
+    }
+
+    // --- JOIN ROOM ---
+    function joinRoom(){
+      currentRoom = document.getElementById("room").value;
+      socket.emit("join", {room: currentRoom, username: currentUsername});
+    }
+
+    // --- SEND MESSAGE ---
+    function sendMessage(){
+      const text = document.getElementById("message").value;
+      socket.emit("send_message", {room: currentRoom, sender: currentUsername, text});
+      document.getElementById("message").value="";
+    }
+
+    // --- SEND FILE ---
+    function sendFile(){
+      const fileInput = document.getElementById("fileInput");
+      if(fileInput.files.length === 0) return;
+      const file = fileInput.files[0];
+      const form = new FormData();
+      form.append("file", file);
+      form.append("room", currentRoom);
+      form.append("sender", currentUsername);
+      fetch("https://chast.onrender.com/upload", {method:"POST", body: form})
+      fileInput.value="";
+    }
+
+    // --- TYPING ---
+    document.getElementById("message").addEventListener("input", ()=>{
+      socket.emit("typing", {room: currentRoom, username: currentUsername});
     });
 
-    function sendMessage() {
-        const room = document.getElementById("room").value;
-        const sender = document.getElementById("username").value;
-        const text = document.getElementById("message").value;
+    socket.on("typing", data=>{
+      document.getElementById("typing").innerText = data.username + " is typing...";
+      setTimeout(()=>{document.getElementById("typing").innerText="";},1000);
+    });
 
-        socket.emit("send_message", { room: room, sender: sender, text: text });
-        document.getElementById("message").value = "";
-    }
-</script>
+    // --- RECEIVE MESSAGES ---
+    socket.on("message", data=>{
+      const box = document.getElementById("chat-box");
+      if(data.type==="text") box.innerHTML += `<p><b>${data.sender}:</b> ${data.text}</p>`;
+      else if(data.type==="file") box.innerHTML += `<p><b>${data.sender} sent file:</b> <a href="https://chast.onrender.com/uploads/${data.text}" target="_blank">${data.text}</a></p>`;
+      box.scrollTop = box.scrollHeight;
+    });
 
+    // --- CHAT HISTORY ---
+    socket.on("chat_history", messages=>{
+      const box = document.getElementById("chat-box");
+      box.innerHTML="";
+      messages.forEach(m=>{
+        if(m.type==="text") box.innerHTML += `<p><b>${m.sender}:</b> ${m.text}</p>`;
+        else box.innerHTML += `<p><b>${m.sender} sent file:</b> <a href="https://chast.onrender.com/uploads/${m.text}" target="_blank">${m.text}</a></p>`;
+      });
+      box.scrollTop = box.scrollHeight;
+    });
 
+    // --- ONLINE USERS ---
+    socket.on("user_status", data=>{
+      document.getElementById("online-users").innerText = "Online: " + data.online_users.join(", ");
+    });
+
+    // --- DISCONNECT ---
+    window.addEventListener("beforeunload", ()=>{
+      socket.emit("disconnect_user",{username: currentUsername, room: currentRoom});
+    });
+  </script>
 </body>
 </html>
