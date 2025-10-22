@@ -1,5 +1,8 @@
-flask
-flask-socketio
-gunicorn
+Flask
+Flask-SocketIO
+Flask-Cors
+python-dotenv
+SQLAlchemy
+psycopg2-binary
 eventlet
-flask-cors
+Werkzeug
