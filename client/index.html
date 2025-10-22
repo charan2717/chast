@@ -1,134 +1,243 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>One-on-One Chat</title>
-  <style>
-    body { font-family: Arial; margin: 20px; }
-    #chat-box { border:1px solid black; height:200px; overflow:auto; padding:5px; }
-    #online-users { margin-top:10px; font-size: 14px; }
-  </style>
-  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>One-on-One Chat</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    margin: 0; padding: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background-color: #f4f6f8;
+  }
+
+  /* Header */
+  header {
+    background-color: #2b6cb0;
+    color: white;
+    padding: 10px 20px;
+    font-size: 20px;
+    text-align: center;
+  }
+
+  /* Main container */
+  #main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* Sidebar for online users */
+  #sidebar {
+    width: 200px;
+    background-color: #edf2f7;
+    border-right: 1px solid #cbd5e0;
+    padding: 10px;
+    box-sizing: border-box;
+  }
+
+  #sidebar h3 { margin-top:0; }
+  #online-users { font-size: 14px; color:#2d3748; }
+
+  /* Chat area */
+  #chat-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  #chat-box {
+    flex: 1;
+    padding: 10px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .message {
+    max-width: 70%;
+    padding: 8px 12px;
+    margin: 5px 0;
+    border-radius: 15px;
+    position: relative;
+    word-wrap: break-word;
+  }
+
+  .sender { background-color: #2b6cb0; color: white; align-self: flex-end; }
+  .receiver { background-color: #e2e8f0; color: #2d3748; align-self: flex-start; }
+
+  .timestamp {
+    font-size: 10px;
+    color: #718096;
+    position: absolute;
+    bottom: -12px;
+    right: 10px;
+  }
+
+  #typing { font-size: 12px; color: #4a5568; margin: 5px 10px; height: 16px; }
+
+  /* Input area */
+  #input-area {
+    display: flex;
+    padding: 10px;
+    border-top: 1px solid #cbd5e0;
+    background-color: #fff;
+  }
+
+  #message { flex: 1; padding: 8px; border-radius: 8px; border:1px solid #cbd5e0; }
+  #send-btn, #file-btn { margin-left: 5px; padding: 8px 12px; border:none; border-radius:8px; background-color:#2b6cb0; color:white; cursor:pointer; }
+  #file-btn { background-color:#38a169; }
+
+  /* Auth overlay */
+  #auth { display: flex; flex-direction: column; justify-content:center; align-items:center; height:100vh; }
+  #auth input { margin: 5px 0; padding: 8px; border-radius: 5px; border:1px solid #cbd5e0; width:200px; }
+  #auth button { margin: 5px; padding: 8px 12px; border:none; border-radius:5px; background-color:#2b6cb0; color:white; cursor:pointer; }
+
+  /* Responsive */
+  @media(max-width:768px){
+    #main { flex-direction: column; }
+    #sidebar { width:100%; height:100px; border-right:none; border-bottom:1px solid #cbd5e0; }
+    #chat-container { flex:1; }
+  }
+</style>
 </head>
 <body>
-  <h2>Full-featured One-on-One Chat</h2>
+<header>One-on-One Chat</header>
 
-  <!-- Login/Register -->
-  <div id="auth">
-    <input id="username" placeholder="Username"><br><br>
-    <input id="password" placeholder="Password" type="password"><br><br>
+<!-- Auth Section -->
+<div id="auth">
+  <input id="username" placeholder="Username">
+  <input id="password" placeholder="Password" type="password">
+  <div>
     <button onclick="register()">Register</button>
     <button onclick="login()">Login</button>
   </div>
+</div>
 
-  <!-- Chat UI -->
-  <div id="chat-ui" style="display:none;">
-    <input id="room" placeholder="Room ID"><br><br>
-    <button onclick="joinRoom()">Join Room</button><br><br>
+<!-- Chat Section -->
+<div id="main" style="display:none;">
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <h3>Online Users</h3>
     <div id="online-users"></div>
-    <div id="chat-box"></div><br>
-    <input id="message" placeholder="Type message...">
-    <button onclick="sendMessage()">Send</button>
-    <input type="file" id="fileInput">
-    <button onclick="sendFile()">Send File</button>
-    <div id="typing"></div>
+    <input id="room" placeholder="Room ID">
+    <button onclick="joinRoom()">Join Room</button>
   </div>
 
-  <script>
-    const socket = io("https://chast.onrender.com", {
-        transports: ["websocket", "polling"]
+  <!-- Chat Container -->
+  <div id="chat-container">
+    <div id="chat-box"></div>
+    <div id="typing"></div>
+    <div id="input-area">
+      <input id="message" placeholder="Type message...">
+      <button id="send-btn" onclick="sendMessage()">Send</button>
+      <input type="file" id="fileInput" style="display:none;">
+      <button id="file-btn" onclick="document.getElementById('fileInput').click()">File</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script>
+  const socket = io("https://chast.onrender.com",{transports:["websocket","polling"]});
+  let currentUsername = "";
+  let currentRoom = "";
+
+  // --- AUTH ---
+  function register(){
+    fetch("https://chast.onrender.com/register", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({username: document.getElementById("username").value, password: document.getElementById("password").value})
+    }).then(res=>res.json()).then(data=>{ alert(data.success?"Registered!":data.error); });
+  }
+
+  function login(){
+    fetch("https://chast.onrender.com/login", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({username: document.getElementById("username").value, password: document.getElementById("password").value})
+    }).then(res=>res.json()).then(data=>{
+      if(data.success){
+        currentUsername = document.getElementById("username").value;
+        document.getElementById("auth").style.display="none";
+        document.getElementById("main").style.display="flex";
+      } else alert(data.error);
     });
-    let currentUsername = "";
-    let currentRoom = "";
+  }
 
-    // --- AUTH ---
-    function register(){
-      fetch("https://chast.onrender.com/register", {
-        method:"POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({username: document.getElementById("username").value, password: document.getElementById("password").value})
-      }).then(res=>res.json()).then(data=>{
-        alert(data.success ? "Registered!" : data.error);
-      });
-    }
+  // --- JOIN ROOM ---
+  function joinRoom(){
+    currentRoom = document.getElementById("room").value;
+    socket.emit("join",{room: currentRoom, username: currentUsername});
+  }
 
-    function login(){
-      fetch("https://chast.onrender.com/login", {
-        method:"POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({username: document.getElementById("username").value, password: document.getElementById("password").value})
-      }).then(res=>res.json()).then(data=>{
-        if(data.success){
-          currentUsername = document.getElementById("username").value;
-          document.getElementById("auth").style.display="none";
-          document.getElementById("chat-ui").style.display="block";
-        } else alert(data.error);
-      });
-    }
+  // --- SEND MESSAGE ---
+  function sendMessage(){
+    const text = document.getElementById("message").value;
+    if(text.trim()==="") return;
+    socket.emit("send_message",{room:currentRoom,sender:currentUsername,text});
+    document.getElementById("message").value="";
+  }
 
-    // --- JOIN ROOM ---
-    function joinRoom(){
-      currentRoom = document.getElementById("room").value;
-      socket.emit("join", {room: currentRoom, username: currentUsername});
-    }
+  // --- FILE UPLOAD ---
+  document.getElementById("fileInput").addEventListener("change", ()=>{
+    const file = document.getElementById("fileInput").files[0];
+    if(!file) return;
+    const form = new FormData();
+    form.append("file",file);
+    form.append("room",currentRoom);
+    form.append("sender",currentUsername);
+    fetch("https://chast.onrender.com/upload",{method:"POST",body:form});
+    document.getElementById("fileInput").value="";
+  });
 
-    // --- SEND MESSAGE ---
-    function sendMessage(){
-      const text = document.getElementById("message").value;
-      socket.emit("send_message", {room: currentRoom, sender: currentUsername, text});
-      document.getElementById("message").value="";
-    }
+  // --- TYPING INDICATOR ---
+  document.getElementById("message").addEventListener("input", ()=>{
+    socket.emit("typing",{room:currentRoom,username:currentUsername});
+  });
 
-    // --- SEND FILE ---
-    function sendFile(){
-      const fileInput = document.getElementById("fileInput");
-      if(fileInput.files.length === 0) return;
-      const file = fileInput.files[0];
-      const form = new FormData();
-      form.append("file", file);
-      form.append("room", currentRoom);
-      form.append("sender", currentUsername);
-      fetch("https://chast.onrender.com/upload", {method:"POST", body: form})
-      fileInput.value="";
-    }
+  socket.on("typing", data=>{
+    const typingEl = document.getElementById("typing");
+    typingEl.innerText = data.username+" is typing...";
+    setTimeout(()=>{typingEl.innerText="";},1000);
+  });
 
-    // --- TYPING ---
-    document.getElementById("message").addEventListener("input", ()=>{
-      socket.emit("typing", {room: currentRoom, username: currentUsername});
+  // --- RECEIVE MESSAGES ---
+  socket.on("message", data=>{
+    const box = document.getElementById("chat-box");
+    const div = document.createElement("div");
+    div.className = data.sender===currentUsername ? "message sender" : "message receiver";
+    if(data.type==="text") div.innerHTML = `<b>${data.sender}:</b> ${data.text}<span class="timestamp">${data.timestamp||""}</span>`;
+    else div.innerHTML = `<b>${data.sender} sent file:</b> <a href="https://chast.onrender.com/uploads/${data.text}" target="_blank">${data.text}</a><span class="timestamp">${data.timestamp||""}</span>`;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  });
+
+  // --- CHAT HISTORY ---
+  socket.on("chat_history", messages=>{
+    const box = document.getElementById("chat-box");
+    box.innerHTML="";
+    messages.forEach(m=>{
+      const div = document.createElement("div");
+      div.className = m.sender===currentUsername ? "message sender" : "message receiver";
+      if(m.type==="text") div.innerHTML = `<b>${m.sender}:</b> ${m.text}<span class="timestamp">${m.timestamp||""}</span>`;
+      else div.innerHTML = `<b>${m.sender} sent file:</b> <a href="https://chast.onrender.com/uploads/${m.text}" target="_blank">${m.text}</a><span class="timestamp">${m.timestamp||""}</span>`;
+      box.appendChild(div);
     });
+    box.scrollTop = box.scrollHeight;
+  });
 
-    socket.on("typing", data=>{
-      document.getElementById("typing").innerText = data.username + " is typing...";
-      setTimeout(()=>{document.getElementById("typing").innerText="";},1000);
-    });
+  // --- ONLINE USERS ---
+  socket.on("user_status", data=>{
+    document.getElementById("online-users").innerText = data.online_users.join(", ");
+  });
 
-    // --- RECEIVE MESSAGES ---
-    socket.on("message", data=>{
-      const box = document.getElementById("chat-box");
-      if(data.type==="text") box.innerHTML += `<p><b>${data.sender}:</b> ${data.text}</p>`;
-      else if(data.type==="file") box.innerHTML += `<p><b>${data.sender} sent file:</b> <a href="https://chast.onrender.com/uploads/${data.text}" target="_blank">${data.text}</a></p>`;
-      box.scrollTop = box.scrollHeight;
-    });
-
-    // --- CHAT HISTORY ---
-    socket.on("chat_history", messages=>{
-      const box = document.getElementById("chat-box");
-      box.innerHTML="";
-      messages.forEach(m=>{
-        if(m.type==="text") box.innerHTML += `<p><b>${m.sender}:</b> ${m.text}</p>`;
-        else box.innerHTML += `<p><b>${m.sender} sent file:</b> <a href="https://chast.onrender.com/uploads/${m.text}" target="_blank">${m.text}</a></p>`;
-      });
-      box.scrollTop = box.scrollHeight;
-    });
-
-    // --- ONLINE USERS ---
-    socket.on("user_status", data=>{
-      document.getElementById("online-users").innerText = "Online: " + data.online_users.join(", ");
-    });
-
-    // --- DISCONNECT ---
-    window.addEventListener("beforeunload", ()=>{
-      socket.emit("disconnect_user",{username: currentUsername, room: currentRoom});
-    });
-  </script>
+  // --- DISCONNECT ---
+  window.addEventListener("beforeunload", ()=>{
+    socket.emit("disconnect_user",{username:currentUsername,room:currentRoom});
+  });
+</script>
 </body>
 </html>
