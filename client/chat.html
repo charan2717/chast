@@ -17,7 +17,7 @@
     <button onclick="sendMessage()">Send</button>
 
     <script>
-        const socket = io("YOUR_RENDER_BACKEND_URL");
+        const socket = io("https://chast.onrender.com");
 
         function joinRoom() {
             const room = document.getElementById("room").value;
