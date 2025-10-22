@@ -16,27 +16,32 @@
     <input id="message" placeholder="Type message...">
     <button onclick="sendMessage()">Send</button>
 
-    <script>
-        const socket = io("https://chast.onrender.com");
+   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script>
+    const socket = io("https://chast.onrender.com", {
+        transports: ["websocket", "polling"]
+    });
 
-        function joinRoom() {
-            const room = document.getElementById("room").value;
-            socket.emit("join", { room: room });
-        }
+    function joinRoom() {
+        const room = document.getElementById("room").value;
+        socket.emit("join", { room: room });
+    }
 
-        socket.on("message", (data) => {
-            const box = document.getElementById("chat-box");
-            box.innerHTML += `<p><b>${data.sender}:</b> ${data.text}</p>`;
-        });
+    socket.on("message", (data) => {
+        const box = document.getElementById("chat-box");
+        box.innerHTML += `<p><b>${data.sender}:</b> ${data.text}</p>`;
+    });
 
-        function sendMessage() {
-            const room = document.getElementById("room").value;
-            const sender = document.getElementById("username").value;
-            const text = document.getElementById("message").value;
+    function sendMessage() {
+        const room = document.getElementById("room").value;
+        const sender = document.getElementById("username").value;
+        const text = document.getElementById("message").value;
 
-            socket.emit("send_message", { room: room, sender: sender, text: text });
-            document.getElementById("message").value = "";
-        }
-    </script>
+        socket.emit("send_message", { room: room, sender: sender, text: text });
+        document.getElementById("message").value = "";
+    }
+</script>
+
+
 </body>
 </html>
