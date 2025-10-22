@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>One-on-One Chat</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+    <h2>One-on-One Chat</h2>
+
+    <input id="room" placeholder="Room ID"><br><br>
+    <input id="username" placeholder="Your Name"><br><br>
+    <button onclick="joinRoom()">Join Chat</button>
+
+    <div id="chat-box" style="border:1px solid black; height:200px; overflow:auto; margin-top:20px;"></div>
+
+    <input id="message" placeholder="Type message...">
+    <button onclick="sendMessage()">Send</button>
+
+    <script>
+        const socket = io("YOUR_RENDER_BACKEND_URL");
+
+        function joinRoom() {
+            const room = document.getElementById("room").value;
+            socket.emit("join", { room: room });
+        }
+
+        socket.on("message", (data) => {
+            const box = document.getElementById("chat-box");
+            box.innerHTML += `<p><b>${data.sender}:</b> ${data.text}</p>`;
+        });
+
+        function sendMessage() {
+            const room = document.getElementById("room").value;
+            const sender = document.getElementById("username").value;
+            const text = document.getElementById("message").value;
+
+            socket.emit("send_message", { room: room, sender: sender, text: text });
+            document.getElementById("message").value = "";
+        }
+    </script>
+</body>
+</html>
