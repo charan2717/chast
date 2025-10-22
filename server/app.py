@@ -1,16 +1,10 @@
 import os
+import sqlite3
 from flask import Flask, request, jsonify, send_from_directory
 from flask_socketio import SocketIO, join_room, leave_room, emit
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from dotenv import load_dotenv
-
-# --- LOAD ENV ---
-load_dotenv()
 
 # --- CONFIG ---
 UPLOAD_FOLDER = "uploads"
@@ -21,176 +15,161 @@ CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
+DB_FILE = "chat.db"
+
 # --- DATABASE SETUP ---
-DB_URL = os.getenv("DATABASE_URL")  # Put your CockroachDB URL in .env
-engine = create_engine(DB_URL, echo=True, pool_pre_ping=True)
-Base = declarative_base()
-Session = sessionmaker(bind=engine)
-session = Session()
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    # Users table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE,
+            password_hash TEXT,
+            online_status INTEGER
+        )
+    ''')
+    # Messages table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id TEXT,
+            sender TEXT,
+            text TEXT,
+            timestamp TEXT,
+            type TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-# --- DATABASE MODELS ---
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True)
-    username = Column(String(50), unique=True)
-    password_hash = Column(String(255))
-    online_status = Column(Integer, default=0)
+init_db()
 
-class FriendRequest(Base):
-    __tablename__ = "friend_requests"
-    id = Column(Integer, primary_key=True)
-    sender = Column(String(50))
-    receiver = Column(String(50))
-    status = Column(String(20), default="pending")
-
-class Friend(Base):
-    __tablename__ = "friends"
-    id = Column(Integer, primary_key=True)
-    user1 = Column(String(50))
-    user2 = Column(String(50))
-
-class Message(Base):
-    __tablename__ = "messages"
-    id = Column(Integer, primary_key=True)
-    room_id = Column(String(100))
-    sender = Column(String(50))
-    text = Column(Text)
-    timestamp = Column(String(50))
-    type = Column(String(20), default="text")
-
-Base.metadata.create_all(engine)
-
-# --- AUTH ---
+# --- USER ROUTES ---
 @app.route("/register", methods=["POST"])
 def register():
     data = request.json
     username = data["username"]
     password = data["password"]
     password_hash = generate_password_hash(password)
-    if session.query(User).filter_by(username=username).first():
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("INSERT INTO users (username, password_hash, online_status) VALUES (?, ?, 0)", 
+                  (username, password_hash))
+        conn.commit()
+        conn.close()
+        return jsonify({"success": True})
+    except sqlite3.IntegrityError:
         return jsonify({"success": False, "error": "Username already exists"})
-    user = User(username=username, password_hash=password_hash)
-    session.add(user)
-    session.commit()
-    return jsonify({"success": True})
 
 @app.route("/login", methods=["POST"])
 def login():
     data = request.json
-    user = session.query(User).filter_by(username=data["username"]).first()
-    if user and check_password_hash(user.password_hash, data["password"]):
+    username = data["username"]
+    password = data["password"]
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT password_hash FROM users WHERE username=?", (username,))
+    row = c.fetchone()
+    conn.close()
+    if row and check_password_hash(row[0], password):
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "Invalid credentials"})
-
-# --- FRIEND SYSTEM ---
-@app.route("/send_friend_request", methods=["POST"])
-def send_friend_request():
-    data = request.json
-    sender, receiver = data["sender"], data["receiver"]
-    # Already friends?
-    if session.query(Friend).filter(
-        ((Friend.user1==sender) & (Friend.user2==receiver)) |
-        ((Friend.user1==receiver) & (Friend.user2==sender))
-    ).first():
-        return jsonify({"success": False, "error": "Already friends"})
-    # Request exists?
-    if session.query(FriendRequest).filter_by(sender=sender, receiver=receiver, status="pending").first():
-        return jsonify({"success": False, "error": "Request already sent"})
-    fr = FriendRequest(sender=sender, receiver=receiver)
-    session.add(fr)
-    session.commit()
-    return jsonify({"success": True})
-
-@app.route("/get_friend_requests/<username>")
-def get_friend_requests(username):
-    requests = session.query(FriendRequest).filter_by(receiver=username, status="pending").all()
-    return jsonify([{"id": r.id, "sender": r.sender} for r in requests])
-
-@app.route("/respond_friend_request", methods=["POST"])
-def respond_friend_request():
-    data = request.json
-    fr = session.query(FriendRequest).filter_by(id=data["request_id"]).first()
-    if not fr:
-        return jsonify({"success": False, "error": "Request not found"})
-    if data["action"]=="accept":
-        f = Friend(user1=fr.sender, user2=fr.receiver)
-        session.add(f)
-        fr.status = "accepted"
-    else:
-        fr.status = "rejected"
-    session.commit()
-    return jsonify({"success": True})
-
-@app.route("/get_friends/<username>")
-def get_friends(username):
-    friends = session.query(Friend).filter(
-        (Friend.user1==username) | (Friend.user2==username)
-    ).all()
-    return jsonify([f.user2 if f.user1==username else f.user1 for f in friends])
 
 # --- SOCKET.IO EVENTS ---
 @socketio.on("join")
 def handle_join(data):
-    room, username = data["room"], data["username"]
+    room = data["room"]
+    username = data["username"]
     join_room(room)
-    user = session.query(User).filter_by(username=username).first()
-    if user:
-        user.online_status = 1
-        session.commit()
+    # Set user online
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE users SET online_status=1 WHERE username=?", (username,))
+    conn.commit()
+    conn.close()
+    emit("message", {"sender": "System", "text": f"{username} joined the chat", "type":"text"}, room=room)
     emit("user_status", get_online_users(), room=room)
     # Send chat history
-    messages = session.query(Message).filter_by(room_id=room).order_by(Message.id.asc()).all()
-    emit("chat_history", [{"sender": m.sender, "text": m.text, "timestamp": m.timestamp, "type": m.type} for m in messages])
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT sender, text, timestamp, type FROM messages WHERE room_id=? ORDER BY id ASC", (room,))
+    messages = [{"sender": s, "text": t, "timestamp": ts, "type": tp} for s, t, ts, tp in c.fetchall()]
+    conn.close()
+    emit("chat_history", messages)
 
 @socketio.on("send_message")
 def handle_send_message(data):
-    room, sender, text = data["room"], data["sender"], data["text"]
+    room = data["room"]
+    sender = data["sender"]
+    text = data["text"]
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    m = Message(room_id=room, sender=sender, text=text, type="text", timestamp=timestamp)
-    session.add(m)
-    session.commit()
-    emit("message", {"sender": sender, "text": text, "type":"text","timestamp":timestamp}, room=room)
+    # Save message
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT INTO messages (room_id, sender, text, timestamp, type) VALUES (?, ?, ?, ?, ?)",
+              (room, sender, text, timestamp, "text"))
+    conn.commit()
+    conn.close()
+    emit("message", {"sender": sender, "text": text, "type":"text", "timestamp": timestamp}, room=room)
 
 @socketio.on("typing")
 def handle_typing(data):
-    emit("typing", {"username": data["username"]}, room=data["room"], include_self=False)
+    room = data["room"]
+    username = data["username"]
+    emit("typing", {"username": username}, room=room, include_self=False)
 
 @socketio.on("disconnect_user")
 def handle_disconnect(data):
-    username, room = data["username"], data["room"]
+    username = data["username"]
+    room = data["room"]
     leave_room(room)
-    user = session.query(User).filter_by(username=username).first()
-    if user:
-        user.online_status = 0
-        session.commit()
+    # Set user offline
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE users SET online_status=0 WHERE username=?", (username,))
+    conn.commit()
+    conn.close()
     emit("user_status", get_online_users(), room=room)
 
 def get_online_users():
-    users = session.query(User).filter_by(online_status=1).all()
-    return {"online_users": [u.username for u in users]}
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT username FROM users WHERE online_status=1")
+    users = [u[0] for u in c.fetchall()]
+    conn.close()
+    return {"online_users": users}
 
 # --- FILE UPLOAD ---
 @app.route("/upload", methods=["POST"])
 def upload_file():
     file = request.files["file"]
-    room, sender = request.form["room"], request.form["sender"]
+    room = request.form["room"]
+    sender = request.form["sender"]
     filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{file.filename}"
     filepath = os.path.join(UPLOAD_FOLDER, filename)
     file.save(filepath)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    m = Message(room_id=room, sender=sender, text=filename, type="file", timestamp=timestamp)
-    session.add(m)
-    session.commit()
-    socketio.emit("message", {"sender": sender, "text": filename, "type":"file","timestamp":timestamp}, room=room)
+    # Save to DB
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT INTO messages (room_id, sender, text, timestamp, type) VALUES (?, ?, ?, ?, ?)",
+              (room, sender, filename, timestamp, "file"))
+    conn.commit()
+    conn.close()
+    socketio.emit("message", {"sender": sender, "text": filename, "type":"file", "timestamp": timestamp}, room=room)
     return jsonify({"success": True, "filename": filename})
 
 @app.route("/uploads/<filename>")
 def serve_file(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 
+# --- RUN SERVER ---
 @app.route("/")
 def home():
-    return "Social Chat Server Running!"
+    return "Full-featured Chat Server Running!"
 
-if __name__=="__main__":
+if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", port=5000)
