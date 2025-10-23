@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>FABB</title>
+<title>FABB — Chat</title>
 <style>
   body { font-family: Arial, sans-serif; margin:0; padding:0; display:flex; flex-direction:column; height:100vh; background:#f4f6f8; }
 
@@ -153,4 +153,54 @@ function toggleRooms(){const panel=document.getElementById("mobile-rooms-panel")
 
 // Auth
 function register(){const u=document.getElementById("username").value.trim();const p=document.getElementById("password").value;if(!u||!p){alert("username and password required");return;}fetch(SERVER+"/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})}).then(r=>r.json()).then(d=>{d.success?alert("Registered! Now login."):alert("Error: "+(d.error||"unknown"))});}
-function login(){const u=document.getElementById("username").value.trim();const p=document.getElementById("password").value;if(!u||!p){alert("username and password required");return;}fetch(SERVER+"/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON
+function login(){const u=document.getElementById("username").value.trim();const p=document.getElementById("password").value;if(!u||!p){alert("username and password required");return;}fetch(SERVER+"/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})}).then(r=>r.json()).then(d=>{if(d.success){currentUsername=u;loggedIn=true;setLoggedInUI();}else alert("Error: "+(d.error||"invalid"));});}
+
+// Enable chat after join
+function enableChatUI(){document.getElementById("message").disabled=false;document.getElementById("send-btn").disabled=false;document.getElementById("file-btn").disabled=false;}
+
+// Join / Create Room
+function createRoom(desktop=false){
+  const rid=document.getElementById(desktop?"create-room-id-d":"create-room-id").value.trim();
+  const rpass=document.getElementById(desktop?"create-room-password-d":"create-room-password").value.trim();
+  const rname=document.getElementById(desktop?"create-room-name-d":"create-room-name").value.trim();
+  if(!rid||!rpass){alert("Room ID and password required");return;}
+  fetch(SERVER+"/create_room",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({room_id:rid,password:rpass,name:rname})})
+  .then(r=>r.json()).then(d=>{if(d.success){currentRoom=rid;currentRoomPassword=rpass;document.getElementById("room-header").innerText=rname?rname:"Room: "+rid;document.getElementById("current-room").innerText=rid;document.getElementById("mobile-rooms-panel").style.display="none";enableChatUI();socket.emit("join",{room:rid,username:currentUsername,password:rpass});}else alert(d.error||"Error creating room");});
+}
+
+function joinRoom(desktop=false){
+  const rid=document.getElementById(desktop?"join-room-id-d":"join-room-id").value.trim();
+  const rpass=document.getElementById(desktop?"join-room-password-d":"join-room-password").value.trim();
+  if(!rid||!rpass){alert("Room ID and password required");return;}
+  fetch(SERVER+"/join_room",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({room_id:rid,password:rpass})})
+  .then(r=>r.json()).then(d=>{if(d.success){currentRoom=rid;currentRoomPassword=rpass;document.getElementById("room-header").innerText="Room: "+rid;document.getElementById("current-room").innerText=rid;document.getElementById("mobile-rooms-panel").style.display="none";enableChatUI();document.getElementById("chat-box").innerHTML="";socket.emit("join",{room:rid,username:currentUsername,password:rpass});}else alert(d.error||"Error joining room");});
+}
+
+// Leave Room
+function leaveRoom(){socket.emit("disconnect_user",{username:currentUsername,room:currentRoom});currentRoom="";document.getElementById("room-header").style.display="none";document.getElementById("chat-box").innerHTML="";document.getElementById("message").disabled=true;document.getElementById("send-btn").disabled=true;document.getElementById("file-btn").disabled=true;}
+
+// Send message
+function sendMessage(){const text=document.getElementById("message").value;if(!text.trim()||!currentRoom) return;socket.emit("send_message",{room:currentRoom,sender:currentUsername,text});document.getElementById("message").value="";}
+
+// File upload
+document.getElementById("fileInput").addEventListener("change", ()=>{
+  const file=document.getElementById("fileInput").files[0];if(!file||!currentRoom)return;
+  const form=new FormData();form.append("file",file);form.append("room",currentRoom);form.append("sender",currentUsername);
+  fetch(SERVER+"/upload",{method:"POST",body:form});
+  document.getElementById("fileInput").value="";
+});
+
+// Typing
+document.getElementById("message").addEventListener("input", ()=>{if(currentRoom)socket.emit("typing",{room:currentRoom,username:currentUsername});});
+
+// Socket Events
+socket.on("message", data=>{appendMessage(data.sender,data.text,data.timestamp,data.type);});
+socket.on("chat_history", messages=>{document.getElementById("chat-box").innerHTML="";messages.forEach(m=>appendMessage(m.sender,m.text,m.timestamp,m.type));});
+socket.on("user_status", data=>{document.getElementById("online-users").innerText=data.online_users.join(", ");});
+socket.on("typing", data=>{const el=document.getElementById("typing");el.innerText=data.username+" is typing...";setTimeout(()=>{el.innerText="";},1000);});
+
+// Auto disconnect
+window.addEventListener("beforeunload", ()=>{if(currentRoom)socket.emit("disconnect_user",{username:currentUsername,room:currentRoom});});
+</script>
+</body>
+</html>
