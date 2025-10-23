@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FABB</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>FABB — Chat</title>
 <style>
   body {
     font-family: Arial, sans-serif;
@@ -30,17 +30,21 @@
     overflow: hidden;
   }
 
-  /* Sidebar for online users */
+  /* Sidebar for online users + room controls */
   #sidebar {
-    width: 200px;
+    width: 280px;
     background-color: #edf2f7;
     border-right: 1px solid #cbd5e0;
-    padding: 10px;
+    padding: 12px;
     box-sizing: border-box;
   }
 
   #sidebar h3 { margin-top:0; }
-  #online-users { font-size: 14px; color:#2d3748; }
+  #online-users { font-size: 14px; color:#2d3748; margin-bottom:10px; }
+
+  .panel { background: #fff; padding:10px; border-radius:8px; margin-bottom:12px; border:1px solid #e2e8f0; }
+  .panel input { width:100%; box-sizing:border-box; margin:6px 0; padding:8px; border-radius:6px; border:1px solid #cbd5e0; }
+  .panel button { width:100%; padding:8px; border:none; border-radius:6px; background:#2b6cb0; color:#fff; cursor:pointer; }
 
   /* Chat area */
   #chat-container {
@@ -96,6 +100,8 @@
   #auth input { margin: 5px 0; padding: 8px; border-radius: 5px; border:1px solid #cbd5e0; width:200px; }
   #auth button { margin: 5px; padding: 8px 12px; border:none; border-radius:5px; background-color:#2b6cb0; color:white; cursor:pointer; }
 
+  .muted { color:#718096; font-size:13px; }
+
   /* Responsive */
   @media(max-width:768px){
     #main { flex-direction: column; }
@@ -109,12 +115,13 @@
 
 <!-- Auth Section -->
 <div id="auth">
-  <input id="username" placeholder="Username">
-  <input id="password" placeholder="Password" type="password">
+  <input id="username" placeholder="Username" autocomplete="off">
+  <input id="password" placeholder="Password" type="password" autocomplete="off">
   <div>
     <button onclick="register()">Register</button>
     <button onclick="login()">Login</button>
   </div>
+  <div style="margin-top:10px;" class="muted">You must login to create/join rooms</div>
 </div>
 
 <!-- Chat Section -->
@@ -122,9 +129,31 @@
   <!-- Sidebar -->
   <div id="sidebar">
     <h3>Online Users</h3>
-    <div id="online-users"></div>
-    <input id="room" placeholder="Room ID">
-    <button onclick="joinRoom()">Join Room</button>
+    <div id="online-users" class="muted">--</div>
+
+    <div class="panel">
+      <strong>Create Room</strong>
+      <input id="create-room-id" placeholder="Room ID (unique)" autocomplete="off">
+      <input id="create-room-password" placeholder="Password" type="password" autocomplete="off">
+      <input id="create-room-name" placeholder="Room Name (optional)" autocomplete="off">
+      <button onclick="createRoom()">Create & Join</button>
+      <div id="create-room-status" class="muted" style="margin-top:6px;"></div>
+    </div>
+
+    <div class="panel">
+      <strong>Join Room</strong>
+      <input id="join-room-id" placeholder="Room ID" autocomplete="off">
+      <input id="join-room-password" placeholder="Password" type="password" autocomplete="off">
+      <button onclick="joinRoom()">Join Room</button>
+      <div id="join-room-status" class="muted" style="margin-top:6px;"></div>
+    </div>
+
+    <div class="panel">
+      <strong>Current</strong>
+      <div class="muted">User: <span id="me">—</span></div>
+      <div class="muted">Room: <span id="current-room">—</span></div>
+      <button onclick="leaveRoom()" style="margin-top:8px; background:#e53e3e;">Leave Room</button>
+    </div>
   </div>
 
   <!-- Chat Container -->
@@ -132,112 +161,257 @@
     <div id="chat-box"></div>
     <div id="typing"></div>
     <div id="input-area">
-      <input id="message" placeholder="Type message...">
-      <button id="send-btn" onclick="sendMessage()">Send</button>
+      <input id="message" placeholder="Type message..." disabled>
+      <button id="send-btn" onclick="sendMessage()" disabled>Send</button>
       <input type="file" id="fileInput" style="display:none;">
-      <button id="file-btn" onclick="document.getElementById('fileInput').click()">File</button>
+      <button id="file-btn" onclick="document.getElementById('fileInput').click()" disabled>File</button>
     </div>
   </div>
 </div>
 
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <script>
-  const socket = io("https://chast.onrender.com",{transports:["websocket","polling"]});
+  // Server base
+  const SERVER = "https://chast.onrender.com";
+
+  // Initialize socket (keeps a persistent connection; join happens after validation)
+  const socket = io(SERVER, { transports: ["websocket", "polling"] });
+
   let currentUsername = "";
   let currentRoom = "";
+  let currentRoomPassword = ""; // store for uploads & revalidation
+  let loggedIn = false;
+
+  // --- UI helpers ---
+  function setStatus(elId, msg, isError=false){
+    const el = document.getElementById(elId);
+    el.innerText = msg;
+    el.style.color = isError ? "#e53e3e" : "#4a5568";
+  }
+
+  function appendMessage(sender, text, ts="", type="text"){
+    const box = document.getElementById("chat-box");
+    const div = document.createElement("div");
+    div.className = sender === currentUsername ? "message sender" : "message receiver";
+    if(type==="text") div.innerHTML = `<b>${escapeHtml(sender)}:</b> ${escapeHtml(text)}<span class="timestamp">${ts||""}</span>`;
+    else div.innerHTML = `<b>${escapeHtml(sender)} sent file:</b> <a href="${SERVER}/uploads/${encodeURIComponent(text)}" target="_blank">${escapeHtml(text)}</a><span class="timestamp">${ts||""}</span>`;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function escapeHtml(s){
+    if(!s && s !== 0) return "";
+    return String(s).replace(/[&<>"'`=\/]/g, function(ch){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;","/":"&#x2F;","`":"&#x60;","=":"&#x3D;"}[ch];
+    });
+  }
+
+  function setLoggedInUI(){
+    document.getElementById("auth").style.display = "none";
+    document.getElementById("main").style.display = "flex";
+    document.getElementById("me").innerText = currentUsername;
+  }
 
   // --- AUTH ---
   function register(){
-    fetch("https://chast.onrender.com/register", {
+    const username = document.getElementById("username").value.trim();
+    const password = document.getElementById("password").value;
+    if(!username || !password){ alert("username and password required"); return; }
+    fetch(SERVER + "/register", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({username: document.getElementById("username").value, password: document.getElementById("password").value})
-    }).then(res=>res.json()).then(data=>{ alert(data.success?"Registered!":data.error); });
+      body: JSON.stringify({username, password})
+    }).then(r=>r.json()).then(data=>{
+      if(data.success) {
+        alert("Registered! Now login.");
+      } else {
+        alert("Error: " + (data.error || "unknown"));
+      }
+    }).catch(err => { alert("Network error"); });
   }
 
   function login(){
-    fetch("https://chast.onrender.com/login", {
+    const username = document.getElementById("username").value.trim();
+    const password = document.getElementById("password").value;
+    if(!username || !password){ alert("username and password required"); return; }
+    fetch(SERVER + "/login", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({username: document.getElementById("username").value, password: document.getElementById("password").value})
-    }).then(res=>res.json()).then(data=>{
+      body: JSON.stringify({username, password})
+    }).then(r=>r.json()).then(data=>{
       if(data.success){
-        currentUsername = document.getElementById("username").value;
-        document.getElementById("auth").style.display="none";
-        document.getElementById("main").style.display="flex";
-      } else alert(data.error);
+        currentUsername = username;
+        loggedIn = true;
+        setLoggedInUI();
+      } else {
+        alert("Login failed: " + (data.error || "invalid credentials"));
+      }
+    }).catch(err => { alert("Network error"); });
+  }
+
+  // --- CREATE ROOM ---
+  function createRoom(){
+    if(!loggedIn) { alert("Please login first"); return; }
+    const room_id = document.getElementById("create-room-id").value.trim();
+    const password = document.getElementById("create-room-password").value;
+    const room_name = document.getElementById("create-room-name").value.trim();
+    if(!room_id || password === "") { setStatus("create-room-status","Room ID and password required",true); return; }
+
+    setStatus("create-room-status","Creating room...");
+
+    fetch(SERVER + "/create_room", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ room_id, room_name, password, created_by: currentUsername })
+    }).then(r=>r.json()).then(data=>{
+      if(data.success){
+        setStatus("create-room-status","Room created. Joining...");
+        // Auto-join after create
+        document.getElementById("join-room-id").value = room_id;
+        document.getElementById("join-room-password").value = password;
+        // attempt join
+        joinRoom(true); // pass flag that this was just created
+      } else {
+        setStatus("create-room-status","Error: " + (data.error||"unknown"), true);
+      }
+    }).catch(err=>{
+      setStatus("create-room-status","Network error", true);
     });
   }
 
   // --- JOIN ROOM ---
-  function joinRoom(){
-    currentRoom = document.getElementById("room").value;
-    socket.emit("join",{room: currentRoom, username: currentUsername});
+  function joinRoom(fromCreate=false){
+    if(!loggedIn) { alert("Please login first"); return; }
+    const room_id = (fromCreate ? document.getElementById("create-room-id").value.trim() : document.getElementById("join-room-id").value.trim());
+    const password = (fromCreate ? document.getElementById("create-room-password").value : document.getElementById("join-room-password").value);
+    if(!room_id || password === "") { setStatus("join-room-status","Room ID and password required", true); return; }
+
+    setStatus("join-room-status", "Validating room...");
+
+    fetch(SERVER + "/join_room", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ room_id, password })
+    }).then(r=>r.json()).then(data=>{
+      if(data.success){
+        // server side validation ok -> emit socket join (server also validates again)
+        socket.emit("join", { room: room_id, username: currentUsername, password: password });
+        // store locally
+        currentRoom = room_id;
+        currentRoomPassword = password;
+        document.getElementById("current-room").innerText = currentRoom;
+        // enable chat controls
+        document.getElementById("message").disabled = false;
+        document.getElementById("send-btn").disabled = false;
+        document.getElementById("file-btn").disabled = false;
+        setStatus("join-room-status","Joined room: " + room_id);
+        // clear chat box (will be replaced by chat_history event)
+        document.getElementById("chat-box").innerHTML = "";
+      } else {
+        setStatus("join-room-status","Error: " + (data.error||"invalid"), true);
+      }
+    }).catch(err=>{
+      setStatus("join-room-status","Network error", true);
+    });
+  }
+
+  // leave room (local + notify)
+  function leaveRoom(){
+    if(!currentRoom) return;
+    socket.emit("disconnect_user", { username: currentUsername, room: currentRoom });
+    setStatus("join-room-status","Left room");
+    currentRoom = "";
+    currentRoomPassword = "";
+    document.getElementById("current-room").innerText = "—";
+    document.getElementById("message").disabled = true;
+    document.getElementById("send-btn").disabled = true;
+    document.getElementById("file-btn").disabled = true;
+    document.getElementById("chat-box").innerHTML = "";
   }
 
   // --- SEND MESSAGE ---
   function sendMessage(){
+    if(!currentRoom){ alert("Join a room first"); return; }
     const text = document.getElementById("message").value;
-    if(text.trim()==="") return;
-    socket.emit("send_message",{room:currentRoom,sender:currentUsername,text});
-    document.getElementById("message").value="";
+    if(!text || text.trim()==="") return;
+    socket.emit("send_message", { room: currentRoom, sender: currentUsername, text });
+    document.getElementById("message").value = "";
   }
 
   // --- FILE UPLOAD ---
   document.getElementById("fileInput").addEventListener("change", ()=>{
     const file = document.getElementById("fileInput").files[0];
     if(!file) return;
+    if(!currentRoom || !currentRoomPassword){ alert("Join a room first"); document.getElementById("fileInput").value = ""; return; }
+
     const form = new FormData();
-    form.append("file",file);
-    form.append("room",currentRoom);
-    form.append("sender",currentUsername);
-    fetch("https://chast.onrender.com/upload",{method:"POST",body:form});
-    document.getElementById("fileInput").value="";
+    form.append("file", file);
+    form.append("room", currentRoom);
+    form.append("sender", currentUsername);
+    form.append("password", currentRoomPassword); // include password for server validation
+
+    fetch(SERVER + "/upload", { method: "POST", body: form })
+      .then(r => r.json())
+      .then(data => {
+        if(!data.success) {
+          alert("Upload error: " + (data.error || "unknown"));
+        }
+      }).catch(err => {
+        alert("Upload failed (network).");
+      }).finally(()=> {
+        document.getElementById("fileInput").value = "";
+      });
   });
 
-  // --- TYPING INDICATOR ---
+  // typing indicator
   document.getElementById("message").addEventListener("input", ()=>{
-    socket.emit("typing",{room:currentRoom,username:currentUsername});
+    if(currentRoom) socket.emit("typing", { room: currentRoom, username: currentUsername });
+  });
+
+  // --- SOCKET EVENTS ---
+  socket.on("connect", ()=> {
+    console.log("Socket connected");
+  });
+
+  socket.on("error", (data) => {
+    // shows errors emitted by server (e.g. join validation failed)
+    if(data && data.error) alert("Server error: " + data.error);
+  });
+
+  socket.on("message", data=>{
+    // data: { sender, text, type, timestamp }
+    appendMessage(data.sender, data.text, data.timestamp || "", data.type || "text");
+  });
+
+  socket.on("chat_history", messages=>{
+    // messages: [{sender, text, timestamp, type}, ...]
+    document.getElementById("chat-box").innerHTML = "";
+    messages.forEach(m=>{
+      appendMessage(m.sender, m.text, m.timestamp || "", m.type || "text");
+    });
   });
 
   socket.on("typing", data=>{
     const typingEl = document.getElementById("typing");
-    typingEl.innerText = data.username+" is typing...";
-    setTimeout(()=>{typingEl.innerText="";},1000);
+    typingEl.innerText = data.username + " is typing...";
+    setTimeout(()=> { typingEl.innerText = ""; }, 1000);
   });
 
-  // --- RECEIVE MESSAGES ---
-  socket.on("message", data=>{
-    const box = document.getElementById("chat-box");
-    const div = document.createElement("div");
-    div.className = data.sender===currentUsername ? "message sender" : "message receiver";
-    if(data.type==="text") div.innerHTML = `<b>${data.sender}:</b> ${data.text}<span class="timestamp">${data.timestamp||""}</span>`;
-    else div.innerHTML = `<b>${data.sender} sent file:</b> <a href="https://chast.onrender.com/uploads/${data.text}" target="_blank">${data.text}</a><span class="timestamp">${data.timestamp||""}</span>`;
-    box.appendChild(div);
-    box.scrollTop = box.scrollHeight;
-  });
-
-  // --- CHAT HISTORY ---
-  socket.on("chat_history", messages=>{
-    const box = document.getElementById("chat-box");
-    box.innerHTML="";
-    messages.forEach(m=>{
-      const div = document.createElement("div");
-      div.className = m.sender===currentUsername ? "message sender" : "message receiver";
-      if(m.type==="text") div.innerHTML = `<b>${m.sender}:</b> ${m.text}<span class="timestamp">${m.timestamp||""}</span>`;
-      else div.innerHTML = `<b>${m.sender} sent file:</b> <a href="https://chast.onrender.com/uploads/${m.text}" target="_blank">${m.text}</a><span class="timestamp">${m.timestamp||""}</span>`;
-      box.appendChild(div);
-    });
-    box.scrollTop = box.scrollHeight;
-  });
-
-  // --- ONLINE USERS ---
   socket.on("user_status", data=>{
-    document.getElementById("online-users").innerText = data.online_users.join(", ");
+    const users = (data && data.online_users) ? data.online_users : [];
+    document.getElementById("online-users").innerText = users.length ? users.join(", ") : "—";
   });
 
-  // --- DISCONNECT ---
+  // When server denies join via socket (we also call /join_room before), the server emits error — handled above
+
+  // On unload, notify server we left (best-effort)
   window.addEventListener("beforeunload", ()=>{
-    socket.emit("disconnect_user",{username:currentUsername,room:currentRoom});
+    if(currentRoom && currentUsername) {
+      try { socket.emit("disconnect_user", { username: currentUsername, room: currentRoom }); } catch(e){}
+    }
   });
+
+  // small UX safety: disable chat controls until logged in/joined
+  document.getElementById("message").disabled = true;
+  document.getElementById("send-btn").disabled = true;
+  document.getElementById("file-btn").disabled = true;
+
 </script>
 </body>
 </html>
